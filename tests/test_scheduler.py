@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -10,6 +11,8 @@ class FakeWindow:
     def __init__(self, visible=True):
         self.visible = visible
         self.refresh_count = 0
+        self.clear_count = 0
+        self.feedback = []
 
     def get_visible(self):
         return self.visible
@@ -19,6 +22,12 @@ class FakeWindow:
 
     def hide(self):
         self.visible = False
+
+    def clear_message(self):
+        self.clear_count += 1
+
+    def show_feedback(self, message, kind="info"):
+        self.feedback.append((message, kind))
 
 
 class FakeApplication:
@@ -59,6 +68,47 @@ def recurring_job():
 
 
 class SchedulerTransitionTests(unittest.TestCase):
+    def test_empty_message_can_be_scheduled_as_click_only(self):
+        app = FakeApplication(recurring_job())
+        app.jobs = []
+        app.active_job_id = None
+        app.automator = SimpleNamespace(available=True)
+        now = datetime.fromisoformat("2026-08-24T10:00:00+08:00")
+
+        with patch("typesched.ui.local_now", return_value=now):
+            TypeSchedApplication.add_job(
+                app,
+                "",
+                now + timedelta(minutes=1),
+                Target(1, 2, 30, 12),
+                True,
+                None,
+            )
+
+        self.assertEqual(len(app.jobs), 1)
+        self.assertEqual(app.jobs[0].message, "")
+        self.assertFalse(app.jobs[0].press_enter)
+        self.assertEqual(app.window.clear_count, 1)
+        self.assertEqual(app.window.feedback, [])
+
+    def test_click_only_success_uses_click_notification(self):
+        job = Job(
+            message="",
+            run_at="2026-08-24T10:00:00+08:00",
+            target=Target(1, 2, 30, 12, window_title="Run experiment"),
+            state="sending",
+        )
+        app = FakeApplication(job)
+
+        with patch(
+            "typesched.ui.local_now",
+            return_value=datetime.fromisoformat("2026-08-24T10:02:00+08:00"),
+        ):
+            TypeSchedApplication._finish_job(app, job.id, None)
+
+        self.assertEqual(app.notifications[0][0], "Click completed")
+        self.assertEqual(app.notifications[0][1], "Clicked Run experiment")
+
     def test_finish_success_keeps_recurring_job_pending_and_restores_window(self):
         job = recurring_job()
         app = FakeApplication(job, restore=True)

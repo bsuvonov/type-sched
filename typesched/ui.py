@@ -477,7 +477,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         page.pack_start(self.target_card, False, False, 0)
 
         message_card = self._new_card()
-        message_card.pack_start(self._heading("Message"), False, False, 0)
+        message_card.pack_start(self._heading("Message (optional)"), False, False, 0)
         message_frame = Gtk.ScrolledWindow()
         message_frame.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC)
         message_frame.set_min_content_height(94)
@@ -547,12 +547,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         send_delay_row.pack_start(self.send_delay_unit, False, False, 0)
         self.send_delay_value.connect("value-changed", self._send_delay_changed)
         self.send_delay_unit.connect("changed", self._send_delay_changed)
-        send_delay_cluster = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-        alternative_label = self._muted_label("or")
-        alternative_label.set_line_wrap(False)
-        send_delay_cluster.pack_start(alternative_label, False, False, 0)
-        send_delay_cluster.pack_start(send_delay_row, False, False, 0)
-        schedule_row.pack_end(send_delay_cluster, False, False, 0)
+        schedule_row.pack_end(send_delay_row, False, False, 0)
 
         options_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         self.enter_check = Gtk.CheckButton(label="Press Enter after typing")
@@ -782,7 +777,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
 
         copy = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         content.pack_start(copy, True, True, 0)
-        message = job.message.replace("\n", " ↵ ")
+        message = job.message.replace("\n", " ↵ ") if job.message else "Click only"
         message_label = Gtk.Label(label=message, xalign=0)
         message_label.set_ellipsize(Pango.EllipsizeMode.END)
         message_label.set_max_width_chars(58)
@@ -1032,10 +1027,6 @@ class TypeSchedApplication(Gtk.Application):
     ) -> None:
         if self.window is None:
             return
-        if not message.strip():
-            self.window.show_feedback("Write a message before scheduling it.", "error")
-            self.window.message_view.grab_focus()
-            return
         if target is None:
             self.window.show_feedback("Select a typing area first.", "error")
             return
@@ -1051,7 +1042,7 @@ class TypeSchedApplication(Gtk.Application):
             message=message,
             run_at=run_at.astimezone().isoformat(),
             target=target_copy,
-            press_enter=press_enter,
+            press_enter=press_enter and bool(message),
             repeat_every_minutes=repeat_every_minutes,
         )
         self.jobs.append(job)
@@ -1192,28 +1183,36 @@ class TypeSchedApplication(Gtk.Application):
             return GLib.SOURCE_REMOVE
 
         completed_at = local_now()
+        click_only = not job.message
         if error:
             next_run = job.finish_attempt(completed_at, error)
+            failure_title = "Click failed" if click_only else "Message not sent"
             if next_run is not None:
                 next_label = next_run.astimezone().strftime("%a, %b %d at %H:%M")
                 self._notify(
-                    "Message not sent",
+                    failure_title,
                     f"{error}. Next attempt: {next_label}",
                     job.id,
                 )
             else:
-                self._notify("Message not sent", error, job.id)
+                self._notify(failure_title, error, job.id)
         else:
             next_run = job.finish_attempt(completed_at)
+            success_title = "Click completed" if click_only else "Message sent"
+            success_body = (
+                f"Clicked {job.target.display_name}"
+                if click_only
+                else f"Sent to {job.target.display_name}"
+            )
             if next_run is not None:
                 next_label = next_run.astimezone().strftime("%a, %b %d at %H:%M")
                 self._notify(
-                    "Message sent",
-                    f"Sent to {job.target.display_name}. Next: {next_label}",
+                    success_title,
+                    f"{success_body}. Next: {next_label}",
                     job.id,
                 )
             else:
-                self._notify("Message sent", f"Sent to {job.target.display_name}", job.id)
+                self._notify(success_title, success_body, job.id)
         self._persist()
         if self.window is not None:
             self.window.refresh_jobs()

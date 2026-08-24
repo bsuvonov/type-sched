@@ -71,6 +71,18 @@ class AutomationTests(unittest.TestCase):
         self.assertIn("shift+Return", key_calls[0])
         self.assertIn("Return", key_calls[-1])
 
+    def test_empty_message_only_clicks(self):
+        runner = FakeRunner()
+        automator = X11Automator(binary="/usr/bin/xdotool", runner=runner)
+        target = Target(10, 20, 100, 40)
+        with patch.object(automator, "screen_is_locked", return_value=False), patch(
+            "typesched.automation.time.sleep"
+        ):
+            automator.send_message(target, "", press_enter=True)
+
+        commands = [call[0][1] for call in runner.calls]
+        self.assertEqual(commands, ["mousemove"])
+
     def test_command_failure_becomes_automation_error(self):
         def failed(arguments, **_kwargs):
             return CompletedProcess(arguments, 1, "", "bad window")

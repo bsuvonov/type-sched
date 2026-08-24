@@ -188,6 +188,9 @@ class X11Automator:
         self._run(["mousemove", "--sync", str(x), str(y), "click", "1"])
         time.sleep(0.12)
 
+        if not message:
+            return
+
         lines = message.replace("\r\n", "\n").replace("\r", "\n").split("\n")
         for index, line in enumerate(lines):
             if line:
