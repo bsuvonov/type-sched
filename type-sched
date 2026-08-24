@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+from typesched.ui import main
+
+
+raise SystemExit(main())

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=TypeSched
+GenericName=Scheduled Typing
+Comment=Schedule text to be typed and sent in another app
+Exec="@EXEC@"
+Icon=io.github.typesched.TypeSched
+Terminal=false
+Categories=Utility;
+Keywords=schedule;message;typing;automation;chat;
+StartupNotify=true
+X-GNOME-UsesNotifications=true
