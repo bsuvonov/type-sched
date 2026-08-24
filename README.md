@@ -5,7 +5,7 @@
 </div>
 
 <p align="center">
-  <a href="https://github.com/bsuvonov/type-sched/stargazers"><img src="https://img.shields.io/github/stars/bsuvonov/type-sched?style=flat-square" alt="GitHub stars" /></a>
+  <a href="https://github.com/bsuvonov/type-sched/stargazers"><img src="https://img.shields.io/github/stars/bsuvonov/type-sched?style=flat-square&amp;logo=github&amp;cacheSeconds=3600" alt="GitHub stars" /></a>
   <img src="https://img.shields.io/badge/Linux-X11-FCC624?style=flat-square&logo=linux&logoColor=black" alt="Linux X11" />
   <img src="https://img.shields.io/badge/GTK-3-7FE719?style=flat-square&logo=gtk&logoColor=black" alt="GTK 3" />
   <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10 or newer" />
