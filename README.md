@@ -52,6 +52,21 @@ The click position is stored relative to the selected window. If the window move
 resizes, TypeSched calculates the corresponding point instead of blindly using the old
 screen coordinates.
 
+## Research experiments with coding agents
+
+TypeSched can be especially useful when you are running research-paper experiments with
+coding agents such as Codex and Claude Code. Instead of making the coding agent wait for
+an experiment to complete and repeatedly monitor it—which wastes tokens—you can ask it
+to stop monitoring once the experiment has started successfully.
+
+Then select the coding agent's prompt box in TypeSched and schedule a message such as:
+
+> Check the status of the experiments now. Inspect the logs and results, summarize the progress, and report any failures.
+
+At the scheduled time, TypeSched sends that message to the coding agent, prompting it to
+check the experiment status only when needed. Avoiding unnecessary monitoring turns and
+tool output can save a lot of token usage, especially for experiments that take hours.
+
 ## Quick start
 
 TypeSched requires Python 3.10 or newer, GTK 3 with PyGObject and Pycairo, and `xdotool`.
