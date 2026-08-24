@@ -90,6 +90,18 @@ window.typesched-window {
   font-size: 15px;
 }
 
+spinbutton.clock-spin entry {
+  min-width: 24px;
+  padding-left: 3px;
+  padding-right: 3px;
+}
+
+spinbutton.clock-spin button {
+  min-width: 16px;
+  padding-left: 3px;
+  padding-right: 3px;
+}
+
 .primary-action {
   padding: 7px 18px;
   font-weight: 700;
@@ -387,7 +399,8 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         self.feedback_generation = 0
 
         self.set_title(APP_NAME)
-        self.set_default_size(780, 790)
+        # Greybird's client-side frame adds 52 × 91 px to the visible X11 window.
+        self.set_default_size(668, 679)
         self.set_size_request(650, 600)
         self.set_position(Gtk.WindowPosition.CENTER)
         self.get_style_context().add_class("typesched-window")
@@ -454,11 +467,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         self.target_title = Gtk.Label(label="No typing area selected", xalign=0)
         self.target_title.get_style_context().add_class("section-title")
         self.target_title.set_ellipsize(Pango.EllipsizeMode.END)
-        self.target_description = self._muted_label(
-            "Select the input box in the chat app you want to use."
-        )
         target_copy.pack_start(self.target_title, False, False, 0)
-        target_copy.pack_start(self.target_description, False, False, 0)
 
         select_button = Gtk.Button(label="Select area…")
         select_button.set_size_request(116, -1)
@@ -482,22 +491,16 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         self.message_view.set_top_margin(5)
         self.message_view.set_bottom_margin(5)
         self.message_view.get_style_context().add_class("message-view")
-        self.message_view.get_buffer().connect("changed", self._on_message_changed)
         message_frame.add(self.message_view)
         message_card.pack_start(message_frame, True, True, 0)
-        message_footer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        multiline_hint = self._muted_label("New lines are typed with Shift+Enter.")
-        self.character_count = self._muted_label("0 characters")
-        self.character_count.set_xalign(1)
-        message_footer.pack_start(multiline_hint, True, True, 0)
-        message_footer.pack_end(self.character_count, False, False, 0)
-        message_card.pack_start(message_footer, False, False, 0)
-        page.pack_start(message_card, False, False, 0)
 
         schedule_card = self._new_card()
         schedule_card.pack_start(self._heading("Send time"), False, False, 0)
-        schedule_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        schedule_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
         schedule_card.pack_start(schedule_row, False, False, 0)
+
+        exact_time_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        schedule_row.pack_start(exact_time_row, False, False, 0)
 
         self.date_button = Gtk.MenuButton()
         self.calendar = Gtk.Calendar()
@@ -513,8 +516,9 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         calendar_box.pack_start(self.calendar, True, True, 0)
         self.calendar_popover = Gtk.Popover.new(self.date_button)
         self.calendar_popover.add(calendar_box)
+        calendar_box.show_all()
         self.date_button.set_popover(self.calendar_popover)
-        schedule_row.pack_start(self.date_button, False, False, 0)
+        exact_time_row.pack_start(self.date_button, False, False, 0)
 
         self.hour_spin = self._time_spin(0, 23)
         self.minute_spin = self._time_spin(0, 59)
@@ -522,16 +526,33 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
             if index:
                 colon = Gtk.Label(label=":")
                 colon.get_style_context().add_class("section-title")
-                schedule_row.pack_start(colon, False, False, 0)
-            schedule_row.pack_start(spin, False, False, 0)
+                exact_time_row.pack_start(colon, False, False, 0)
+            exact_time_row.pack_start(spin, False, False, 0)
 
-        quick_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
-        quick_box.set_halign(Gtk.Align.END)
-        schedule_row.pack_end(quick_box, True, True, 0)
-        for label, minutes in (("+1 min", 1), ("+5 min", 5), ("Tomorrow", 1440)):
-            button = Gtk.Button(label=label)
-            button.connect("clicked", self._set_quick_schedule, minutes)
-            quick_box.pack_start(button, False, False, 0)
+        send_delay_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        send_delay_row.set_halign(Gtk.Align.END)
+        send_delay_row.pack_start(Gtk.Label(label="Send in"), False, False, 0)
+        self.send_delay_value = Gtk.SpinButton.new_with_range(1, 999, 1)
+        self.send_delay_value.set_numeric(True)
+        self.send_delay_value.set_value(1)
+        self.send_delay_value.set_width_chars(3)
+        self.send_delay_value.set_max_width_chars(3)
+        self.send_delay_value.set_tooltip_text("Set the first send time from now")
+        send_delay_row.pack_start(self.send_delay_value, False, False, 0)
+        self.send_delay_unit = Gtk.ComboBoxText()
+        self.send_delay_unit.append("minutes", "minutes")
+        self.send_delay_unit.append("hours", "hours")
+        self.send_delay_unit.set_active_id("minutes")
+        self.send_delay_unit.set_tooltip_text("Set the first send time from now")
+        send_delay_row.pack_start(self.send_delay_unit, False, False, 0)
+        self.send_delay_value.connect("value-changed", self._send_delay_changed)
+        self.send_delay_unit.connect("changed", self._send_delay_changed)
+        send_delay_cluster = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        alternative_label = self._muted_label("or")
+        alternative_label.set_line_wrap(False)
+        send_delay_cluster.pack_start(alternative_label, False, False, 0)
+        send_delay_cluster.pack_start(send_delay_row, False, False, 0)
+        schedule_row.pack_end(send_delay_cluster, False, False, 0)
 
         options_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         self.enter_check = Gtk.CheckButton(label="Press Enter after typing")
@@ -567,8 +588,9 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         schedule_button.get_style_context().add_class("primary-action")
         schedule_button.connect("clicked", self._schedule_clicked)
         action_row.pack_end(schedule_button, False, False, 0)
-        schedule_card.pack_start(action_row, False, False, 0)
         page.pack_start(schedule_card, False, False, 0)
+        message_card.pack_start(action_row, False, False, 0)
+        page.pack_start(message_card, False, False, 0)
 
         self.feedback_revealer = Gtk.Revealer()
         self.feedback_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
@@ -603,6 +625,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         spin.set_max_width_chars(2)
         spin.set_alignment(0.5)
         spin.get_style_context().add_class("time-spin")
+        spin.get_style_context().add_class("clock-spin")
 
         def format_value(widget: Gtk.SpinButton) -> bool:
             widget.set_text(f"{widget.get_value_as_int():02d}")
@@ -612,7 +635,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         return spin
 
     def _set_default_schedule(self) -> None:
-        self.set_schedule_time(self._future_whole_minute(5))
+        self._send_delay_changed()
 
     @staticmethod
     def _future_whole_minute(minutes: int) -> datetime:
@@ -643,12 +666,15 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
     def _update_date_button(self, *_args) -> None:
         year, zero_based_month, day = self.calendar.get_date()
         value = datetime(year, zero_based_month + 1, day)
-        self.date_button.set_label(value.strftime("%a, %b %d, %Y"))
+        self.date_button.set_label(value.strftime("%b %d, %Y"))
 
     def _close_calendar(self, *_args) -> None:
         self.calendar_popover.popdown()
 
-    def _set_quick_schedule(self, _button: Gtk.Button, minutes: int) -> None:
+    def _send_delay_changed(self, *_args) -> None:
+        multipliers = {"minutes": 1, "hours": 60}
+        unit = self.send_delay_unit.get_active_id() or "minutes"
+        minutes = self.send_delay_value.get_value_as_int() * multipliers[unit]
         self.set_schedule_time(self._future_whole_minute(minutes))
 
     def _repeat_toggled(self, *_args) -> None:
@@ -662,11 +688,6 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         multipliers = {"minutes": 1, "hours": 60, "days": 1440}
         unit = self.repeat_unit.get_active_id() or "hours"
         return self.repeat_value.get_value_as_int() * multipliers[unit]
-
-    def _on_message_changed(self, buffer: Gtk.TextBuffer) -> None:
-        count = buffer.get_char_count()
-        suffix = "character" if count == 1 else "characters"
-        self.character_count.set_text(f"{count} {suffix}")
 
     def get_message(self) -> str:
         buffer = self.message_view.get_buffer()
@@ -689,7 +710,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         self.current_target = target
         self.target_title.set_text(target.display_name)
         class_suffix = f" · {target.window_class}" if target.window_class else ""
-        self.target_description.set_text(f"{target.area_label}{class_suffix}")
+        self.target_title.set_tooltip_text(f"{target.area_label}{class_suffix}")
         self.target_card.get_style_context().add_class("target-ready")
 
     def show_feedback(self, message: str, kind: str = "info", timeout: int = 7) -> None:
@@ -994,11 +1015,6 @@ class TypeSchedApplication(Gtk.Application):
                 "The fixed screen position will be used.",
                 "info",
             )
-        else:
-            self.window.show_feedback(
-                "Typing area selected. TypeSched will track this window if it moves.",
-                "success",
-            )
         return GLib.SOURCE_REMOVE
 
     def _selection_cancelled(self, selector: RegionSelector) -> None:
@@ -1047,12 +1063,6 @@ class TypeSchedApplication(Gtk.Application):
         self.window.refresh_jobs()
         self._update_tray()
         self.window.clear_message()
-        formatted = run_at.astimezone().strftime("%a, %b %d at %H:%M")
-        if job.is_recurring:
-            feedback = f"Message scheduled for {formatted}. {job.repeat_label}."
-        else:
-            feedback = f"Message scheduled for {formatted}."
-        self.window.show_feedback(feedback, "success")
 
     def cancel_or_remove_job(self, job_id: str) -> None:
         job = self._find_job(job_id)
