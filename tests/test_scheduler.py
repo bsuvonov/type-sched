@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from typesched.model import Job, Target
-from typesched.ui import TypeSchedApplication
+from typesched.ui import Gdk, RegionSelector, TypeSchedApplication
 
 
 class FakeWindow:
@@ -65,6 +65,20 @@ def recurring_job():
         repeat_every_minutes=15,
         state="sending",
     )
+
+
+class RegionSelectorTests(unittest.TestCase):
+    def test_selector_fullscreens_across_all_monitors(self):
+        selector = Mock()
+        gdk_window = selector.get_window.return_value
+
+        with patch("typesched.ui.Gdk.Cursor.new_from_name", return_value=None):
+            RegionSelector._on_realize(selector, None)
+
+        gdk_window.set_fullscreen_mode.assert_called_once_with(
+            Gdk.FullscreenMode.ALL_MONITORS
+        )
+        selector.grab_focus.assert_called_once_with()
 
 
 class SchedulerTransitionTests(unittest.TestCase):

@@ -1,8 +1,16 @@
 from subprocess import CompletedProcess
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
-from typesched.automation import AutomationError, WindowGeometry, X11Automator
+from typesched.automation import (
+    AutomationError,
+    LINE_BREAK_SETTLE_SECONDS,
+    MODIFIER_SETTLE_SECONDS,
+    SEND_SETTLE_SECONDS,
+    TEXT_SETTLE_SECONDS,
+    WindowGeometry,
+    X11Automator,
+)
 from typesched.model import Target
 
 
@@ -60,7 +68,7 @@ class AutomationTests(unittest.TestCase):
         target = Target(10, 20, 100, 40)
         with patch.object(automator, "screen_is_locked", return_value=False), patch(
             "typesched.automation.time.sleep"
-        ):
+        ) as sleep:
             automator.send_message(target, "first\nsecond", key_delay_ms=12)
 
         commands = [call[0][1] for call in runner.calls]
@@ -70,6 +78,35 @@ class AutomationTests(unittest.TestCase):
         self.assertEqual(typed, ["first", "second"])
         self.assertIn("shift+Return", key_calls[0])
         self.assertIn("Return", key_calls[-1])
+        self.assertIn("keyup", commands)
+        self.assertEqual(
+            sleep.call_args_list,
+            [
+                call(0.12),
+                call(LINE_BREAK_SETTLE_SECONDS),
+                call(TEXT_SETTLE_SECONDS),
+                call(MODIFIER_SETTLE_SECONDS),
+                call(SEND_SETTLE_SECONDS),
+            ],
+        )
+
+    def test_final_enter_releases_shift_first(self):
+        runner = FakeRunner()
+        automator = X11Automator(binary="/usr/bin/xdotool", runner=runner)
+        target = Target(10, 20, 100, 40)
+        with patch.object(automator, "screen_is_locked", return_value=False), patch(
+            "typesched.automation.time.sleep"
+        ):
+            automator.send_message(target, "hello", press_enter=True)
+
+        commands = [call[0][1:] for call in runner.calls]
+        self.assertEqual(
+            commands[-2:],
+            [
+                ["keyup", "Shift_L", "Shift_R"],
+                ["key", "--clearmodifiers", "Return"],
+            ],
+        )
 
     def test_empty_message_only_clicks(self):
         runner = FakeRunner()

@@ -27,6 +27,11 @@ class WindowGeometry:
 
 Runner = Callable[..., subprocess.CompletedProcess[str]]
 
+LINE_BREAK_SETTLE_SECONDS = 0.08
+TEXT_SETTLE_SECONDS = 0.25
+MODIFIER_SETTLE_SECONDS = 0.06
+SEND_SETTLE_SECONDS = 0.15
+
 
 class X11Automator:
     """Small, shell-free wrapper around xdotool."""
@@ -208,6 +213,13 @@ class X11Automator:
                 )
             if index < len(lines) - 1:
                 self._run(["key", "--clearmodifiers", "shift+Return"])
+                time.sleep(LINE_BREAK_SETTLE_SECONDS)
 
         if press_enter:
+            # Let the target process its latest text event, then make sure a
+            # previous Shift+Return cannot turn the final Return into a newline.
+            time.sleep(TEXT_SETTLE_SECONDS)
+            self._run(["keyup", "Shift_L", "Shift_R"])
+            time.sleep(MODIFIER_SETTLE_SECONDS)
             self._run(["key", "--clearmodifiers", "Return"])
+            time.sleep(SEND_SETTLE_SECONDS)

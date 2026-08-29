@@ -260,9 +260,11 @@ class RegionSelector(Gtk.Window):
         return left, top, right - left, bottom - top
 
     def _on_realize(self, _window: Gtk.Window) -> None:
+        gdk_window = self.get_window()
+        gdk_window.set_fullscreen_mode(Gdk.FullscreenMode.ALL_MONITORS)
         cursor = Gdk.Cursor.new_from_name(self.get_display(), "crosshair")
         if cursor is not None:
-            self.get_window().set_cursor(cursor)
+            gdk_window.set_cursor(cursor)
         self.grab_focus()
 
     def _on_button_press(self, _window: Gtk.Window, event: Gdk.EventButton) -> bool:
