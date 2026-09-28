@@ -5,7 +5,7 @@ import stat
 import tempfile
 import unittest
 
-from typesched.model import Job, JobStore, Target, local_now
+from typesched.model import STORE_VERSION, Job, JobStore, Step, Target, local_now
 
 
 class TargetTests(unittest.TestCase):
@@ -35,7 +35,36 @@ class JobStoreTests(unittest.TestCase):
             self.assertEqual(loaded[0].repeat_every_minutes, 120)
             self.assertEqual(loaded[0].repeat_label, "Every 2 hours")
             self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
-            self.assertEqual(json.loads(path.read_text())["version"], 2)
+            self.assertEqual(json.loads(path.read_text())["version"], STORE_VERSION)
+
+    def test_procedure_round_trip_and_recurrence(self):
+        steps = [Step(Target(1, 2, 30, 12), "", False),
+                 Step(Target(200, 300, 40, 20, window_id=99), "hello", True, 1.5)]
+        job = Job("", local_now().isoformat(), steps[0].target,
+                  steps=steps, repeat_every_minutes=5)
+        with tempfile.TemporaryDirectory() as directory:
+            store = JobStore(Path(directory) / "jobs.json")
+            store.save([job])
+            restored = store.load()[0]
+        self.assertEqual(restored.execution_steps, steps)
+        restored.finish_attempt(local_now())
+        self.assertEqual(restored.state, "pending")
+        self.assertEqual(restored.execution_steps, steps)
+
+    def test_version_two_job_becomes_single_step(self):
+        job = Job("legacy", local_now().isoformat(), Target(1, 2, 30, 12), press_enter=False)
+        data = job.to_dict()
+        data.pop("steps")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "jobs.json"
+            path.write_text(json.dumps({"version": 2, "jobs": [data]}))
+            loaded = JobStore(path).load()[0]
+        self.assertEqual(loaded.execution_steps, [Step(job.target, "legacy", False)])
+
+    def test_invalid_step_delays_are_rejected(self):
+        for delay in (-1, 3601, float("nan"), float("inf")):
+            with self.subTest(delay=delay), self.assertRaises(ValueError):
+                Step(Target(1, 2, 3, 4), wait_seconds=delay)
 
     def test_version_one_job_loads_without_recurrence(self):
         with tempfile.TemporaryDirectory() as directory:

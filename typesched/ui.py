@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from dataclasses import dataclass
 import math
 import threading
 
@@ -13,8 +14,8 @@ gi.require_version("Pango", "1.0")
 gi.require_version("PangoCairo", "1.0")
 from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango, PangoCairo
 
-from .automation import AutomationError, ScreenLockedError, X11Automator
-from .model import APP_ID, APP_NAME, Job, JobStore, Target, local_now
+from .automation import AutomationError, ProcedureCancelled, ScreenLockedError, X11Automator
+from .model import APP_ID, APP_NAME, Job, JobStore, Step, Target, local_now
 
 
 CSS = b"""
@@ -393,11 +394,23 @@ class RegionSelector(Gtk.Window):
         return True
 
 
+@dataclass
+class DraftStep:
+    target: Target | None = None
+    message: str = ""
+    press_enter: bool = True
+    wait_seconds: float = 0
+
+
 class TypeSchedWindow(Gtk.ApplicationWindow):
     def __init__(self, application: "TypeSchedApplication"):
         super().__init__(application=application)
         self.app = application
         self.current_target: Target | None = None
+        self.draft_steps = [DraftStep()]
+        self.step_index = 0
+        self.updating_steps = False
+        self.loading_step = False
         self.feedback_generation = 0
 
         self.set_title(APP_NAME)
@@ -417,7 +430,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         header = Gtk.HeaderBar()
         header.set_show_close_button(True)
         header.set_title(APP_NAME)
-        header.set_subtitle("Scheduled typing for your desktop")
+        header.set_subtitle("Scheduled actions for your desktop")
         header.get_style_context().add_class("typesched-header")
 
         hide_button = Gtk.Button.new_from_icon_name("go-down-symbolic", Gtk.IconSize.BUTTON)
@@ -466,7 +479,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
 
         target_copy = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         target_row.pack_start(target_copy, True, True, 0)
-        self.target_title = Gtk.Label(label="No typing area selected", xalign=0)
+        self.target_title = Gtk.Label(label="No area selected", xalign=0)
         self.target_title.get_style_context().add_class("section-title")
         self.target_title.set_ellipsize(Pango.EllipsizeMode.END)
         target_copy.pack_start(self.target_title, False, False, 0)
@@ -476,7 +489,6 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         select_button.set_tooltip_text("Hide TypeSched and draw a rectangle on the screen")
         select_button.connect("clicked", lambda _button: self.app.begin_target_selection())
         target_row.pack_end(select_button, False, False, 0)
-        page.pack_start(self.target_card, False, False, 0)
 
         message_card = self._new_card()
         message_card.pack_start(self._heading("Message (optional)"), False, False, 0)
@@ -557,7 +569,17 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         self.enter_check.set_tooltip_text(
             "Turn this off if your app sends with a different shortcut"
         )
-        options_row.pack_start(self.enter_check, True, True, 0)
+        step_options = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        step_options.pack_start(self.enter_check, True, True, 0)
+        step_options.pack_start(Gtk.Label(label="Wait before"), False, False, 0)
+        self.step_wait = Gtk.SpinButton.new_with_range(0, 3600, 0.5)
+        self.step_wait.set_digits(1)
+        self.step_wait.set_numeric(True)
+        self.step_wait.set_width_chars(5)
+        self.step_wait.set_tooltip_text("Seconds to wait before this step starts")
+        step_options.pack_start(self.step_wait, False, False, 0)
+        step_options.pack_start(Gtk.Label(label="sec"), False, False, 0)
+        message_card.pack_start(step_options, False, False, 0)
 
         repeat_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
         self.repeat_check = Gtk.CheckButton(label="Repeat every")
@@ -580,12 +602,33 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         self._repeat_toggled()
 
         action_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        schedule_button = Gtk.Button(label="Schedule message")
+        schedule_button = Gtk.Button(label="Schedule procedure")
         schedule_button.get_style_context().add_class("suggested-action")
         schedule_button.get_style_context().add_class("primary-action")
         schedule_button.connect("clicked", self._schedule_clicked)
         action_row.pack_end(schedule_button, False, False, 0)
         page.pack_start(schedule_card, False, False, 0)
+        procedure_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.step_combo = Gtk.ComboBoxText()
+        self.step_combo.set_hexpand(True)
+        self.step_combo.connect("changed", self._step_selected)
+        procedure_row.pack_start(self.step_combo, True, True, 0)
+        add_step = Gtk.Button(label="Add step")
+        add_step.connect("clicked", self._add_step)
+        procedure_row.pack_start(add_step, False, False, 0)
+        for icon, tooltip, callback, name in (
+            ("go-up-symbolic", "Move step up", lambda *_: self._move_step(-1), "step_up"),
+            ("go-down-symbolic", "Move step down", lambda *_: self._move_step(1), "step_down"),
+            ("edit-delete-symbolic", "Remove step", self._remove_step, "step_remove"),
+        ):
+            button = Gtk.Button.new_from_icon_name(icon, Gtk.IconSize.BUTTON)
+            button.set_tooltip_text(tooltip)
+            button.connect("clicked", callback)
+            setattr(self, name, button)
+            procedure_row.pack_start(button, False, False, 0)
+        page.pack_start(procedure_row, False, False, 0)
+        page.pack_start(self.target_card, False, False, 0)
+        self._refresh_steps()
         message_card.pack_start(action_row, False, False, 0)
         page.pack_start(message_card, False, False, 0)
 
@@ -598,7 +641,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         page.pack_start(self.feedback_revealer, False, False, 0)
 
         queue_header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-        queue_header.pack_start(self._heading("Scheduled messages"), True, True, 0)
+        queue_header.pack_start(self._heading("Scheduled tasks"), True, True, 0)
         self.pending_count = self._muted_label("")
         self.pending_count.set_xalign(1)
         queue_header.pack_start(self.pending_count, False, False, 0)
@@ -612,6 +655,9 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         self.job_list = Gtk.ListBox()
         self.job_list.set_selection_mode(Gtk.SelectionMode.NONE)
         page.pack_start(self.job_list, False, False, 0)
+        self.message_view.get_buffer().connect("changed", self._editor_changed)
+        self.enter_check.connect("toggled", self._editor_changed)
+        self.step_wait.connect("value-changed", self._editor_changed)
 
     @staticmethod
     def _time_spin(lower: int, upper: int) -> Gtk.SpinButton:
@@ -691,16 +737,119 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         return buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
 
     def clear_message(self) -> None:
-        self.message_view.get_buffer().set_text("")
+        self.draft_steps = [DraftStep()]
+        self.step_index = 0
+        self._load_step()
+        self._refresh_steps()
+
+    def _save_step(self) -> None:
+        self.draft_steps[self.step_index] = DraftStep(
+            self.current_target, self.get_message(), self.enter_check.get_active(),
+            self.step_wait.get_value(),
+        )
+
+    def _load_step(self) -> None:
+        self.loading_step = True
+        step = self.draft_steps[self.step_index]
+        self.current_target = step.target
+        self.message_view.get_buffer().set_text(step.message)
+        self.enter_check.set_active(step.press_enter)
+        self.step_wait.set_value(step.wait_seconds)
+        if step.target is not None:
+            self.set_target(step.target)
+        else:
+            self.target_title.set_text("No area selected")
+            self.target_title.set_tooltip_text(None)
+            self.target_card.get_style_context().remove_class("target-ready")
+        self.loading_step = False
+
+    def _step_label(self, index: int) -> str:
+        step = self.draft_steps[index]
+        action = "Type + Enter" if step.message and step.press_enter else (
+            "Type" if step.message else "Click"
+        )
+        target = step.target.display_name if step.target else "Select area…"
+        return f"Step {index + 1}/{len(self.draft_steps)} · {action} · {target[:24]}"
+
+    def _editor_changed(self, *_args) -> None:
+        if self.loading_step:
+            return
+        self._save_step()
+        self.updating_steps = True
+        self.step_combo.get_model()[self.step_index][0] = self._step_label(self.step_index)
+        self.updating_steps = False
+
+    def _refresh_steps(self) -> None:
+        self.updating_steps = True
+        self.step_combo.remove_all()
+        for index in range(len(self.draft_steps)):
+            self.step_combo.append_text(self._step_label(index))
+        self.step_combo.set_active(self.step_index)
+        self.step_up.set_sensitive(self.step_index > 0)
+        self.step_down.set_sensitive(self.step_index < len(self.draft_steps) - 1)
+        self.step_remove.set_sensitive(len(self.draft_steps) > 1)
+        self.updating_steps = False
+
+    def _step_selected(self, combo: Gtk.ComboBoxText) -> None:
+        if self.updating_steps or combo.get_active() < 0:
+            return
+        self._save_step()
+        self.step_index = combo.get_active()
+        self._load_step()
+        self._refresh_steps()
+
+    def _add_step(self, *_args) -> None:
+        self._save_step()
+        if self.current_target is None:
+            self.show_feedback(
+                f"Select an area for step {self.step_index + 1} before adding another step.",
+                "error", timeout=0,
+            )
+            return
+        self.draft_steps.insert(self.step_index + 1, DraftStep(wait_seconds=1))
+        self.step_index += 1
+        self._load_step()
+        self._refresh_steps()
+
+    def _remove_step(self, *_args) -> None:
+        if len(self.draft_steps) == 1:
+            return
+        self.draft_steps.pop(self.step_index)
+        self.step_index = min(self.step_index, len(self.draft_steps) - 1)
+        self._load_step()
+        self._refresh_steps()
+
+    def _move_step(self, offset: int) -> None:
+        destination = self.step_index + offset
+        if not 0 <= destination < len(self.draft_steps):
+            return
+        self._save_step()
+        self.draft_steps[self.step_index], self.draft_steps[destination] = (
+            self.draft_steps[destination], self.draft_steps[self.step_index]
+        )
+        self.step_index = destination
+        self._refresh_steps()
 
     def _schedule_clicked(self, _button: Gtk.Button) -> None:
+        self._save_step()
+        steps = []
+        for index, draft in enumerate(self.draft_steps):
+            if draft.target is None:
+                self.show_feedback(
+                    f"Step {index + 1} needs an area. Choose it in the step dropdown, "
+                    "then click Select area… Your steps are unchanged.",
+                    "error", timeout=0,
+                )
+                return
+            steps.append(Step(draft.target, draft.message, draft.press_enter, draft.wait_seconds))
         run_at = self.selected_schedule_time()
         self.app.add_job(
-            self.get_message(),
+            steps[0].message,
             run_at,
-            self.current_target,
-            self.enter_check.get_active(),
+            steps[0].target,
+            steps[0].press_enter,
             self.selected_repeat_minutes(),
+            steps=steps,
         )
 
     def set_target(self, target: Target) -> None:
@@ -709,6 +858,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         class_suffix = f" · {target.window_class}" if target.window_class else ""
         self.target_title.set_tooltip_text(f"{target.area_label}{class_suffix}")
         self.target_card.get_style_context().add_class("target-ready")
+        self._editor_changed()
 
     def show_feedback(self, message: str, kind: str = "info", timeout: int = 7) -> None:
         context = self.feedback_label.get_style_context()
@@ -746,7 +896,7 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
 
         pending = sum(job.state in ("pending", "sending") for job in self.app.jobs)
         self.pending_count.set_text(
-            f"{pending} pending" if pending else "No pending messages"
+            f"{pending} pending" if pending else "No pending tasks"
         )
         has_finished = any(job.state not in ("pending", "sending") for job in self.app.jobs)
         self.clear_button.set_no_show_all(not has_finished)
@@ -780,9 +930,16 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         copy = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
         content.pack_start(copy, True, True, 0)
         message = job.message.replace("\n", " ↵ ") if job.message else "Click only"
+        if len(job.execution_steps) > 1:
+            message = f"{len(job.execution_steps)} steps · {message}"
         message_label = Gtk.Label(label=message, xalign=0)
         message_label.set_ellipsize(Pango.EllipsizeMode.END)
         message_label.set_max_width_chars(58)
+        message_label.set_tooltip_text("\n".join(
+            f"{index}. {'Type + Enter' if step.message and step.press_enter else 'Type' if step.message else 'Click'}"
+            f" · {step.target.display_name} · wait {step.wait_seconds:g}s"
+            for index, step in enumerate(job.execution_steps, 1)
+        ))
         message_label.get_style_context().add_class("job-message")
         copy.pack_start(message_label, False, False, 0)
 
@@ -801,8 +958,8 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
 
         state_names = {
             "pending": "PENDING",
-            "sending": "SENDING",
-            "sent": "SENT",
+            "sending": "RUNNING",
+            "sent": "DONE",
             "failed": "FAILED",
             "missed": "MISSED",
             "cancelled": "CANCELLED",
@@ -813,18 +970,18 @@ class TypeSchedWindow(Gtk.ApplicationWindow):
         state.get_style_context().add_class(f"status-{job.state}")
         content.pack_start(state, False, False, 0)
 
-        if job.state != "sending":
-            button = Gtk.Button.new_from_icon_name(
-                "process-stop-symbolic" if job.state == "pending" else "edit-delete-symbolic",
-                Gtk.IconSize.BUTTON,
-            )
-            button.set_relief(Gtk.ReliefStyle.NONE)
-            button.set_valign(Gtk.Align.CENTER)
-            button.set_tooltip_text(
-                "Cancel this message" if job.state == "pending" else "Remove from history"
-            )
-            button.connect("clicked", self._job_action, job.id)
-            content.pack_end(button, False, False, 0)
+        button = Gtk.Button.new_from_icon_name(
+            "process-stop-symbolic" if job.state in ("pending", "sending") else "edit-delete-symbolic",
+            Gtk.IconSize.BUTTON,
+        )
+        button.set_relief(Gtk.ReliefStyle.NONE)
+        button.set_valign(Gtk.Align.CENTER)
+        button.set_tooltip_text(
+            "Stop after current step" if job.state == "sending" else
+            "Cancel this task" if job.state == "pending" else "Remove from history"
+        )
+        button.connect("clicked", self._job_action, job.id)
+        content.pack_end(button, False, False, 0)
         return row
 
     def _job_action(self, _button: Gtk.Button, job_id: str) -> None:
@@ -850,6 +1007,7 @@ class TypeSchedApplication(Gtk.Application):
         self.store = JobStore()
         self.automator = X11Automator()
         self.active_job_id: str | None = None
+        self.cancel_event = threading.Event()
         self.restore_window_after_job = False
 
     def do_startup(self) -> None:
@@ -939,7 +1097,7 @@ class TypeSchedApplication(Gtk.Application):
         menu.append(open_item)
 
         pending = sum(job.state in ("pending", "sending") for job in self.jobs)
-        count_item = Gtk.MenuItem(label=f"{pending} pending message{'s' if pending != 1 else ''}")
+        count_item = Gtk.MenuItem(label=f"{pending} pending task{'s' if pending != 1 else ''}")
         count_item.set_sensitive(False)
         menu.append(count_item)
         menu.append(Gtk.SeparatorMenuItem())
@@ -1026,11 +1184,13 @@ class TypeSchedApplication(Gtk.Application):
         target: Target | None,
         press_enter: bool,
         repeat_every_minutes: int | None,
+        *,
+        steps: list[Step] | None = None,
     ) -> None:
         if self.window is None:
             return
         if target is None:
-            self.window.show_feedback("Select a typing area first.", "error")
+            self.window.show_feedback("Select an area first.", "error")
             return
         if run_at <= local_now() + timedelta(seconds=2):
             self.window.show_feedback("Choose a future minute.", "error")
@@ -1046,6 +1206,7 @@ class TypeSchedApplication(Gtk.Application):
             target=target_copy,
             press_enter=press_enter and bool(message),
             repeat_every_minutes=repeat_every_minutes,
+            steps=[Step.from_dict(step.to_dict()) for step in steps] if steps else [],
         )
         self.jobs.append(job)
         if not self._persist():
@@ -1059,7 +1220,10 @@ class TypeSchedApplication(Gtk.Application):
 
     def cancel_or_remove_job(self, job_id: str) -> None:
         job = self._find_job(job_id)
-        if job is None or job.state == "sending":
+        if job is None:
+            return
+        if job.state == "sending":
+            self.cancel_event.set()
             return
         if job.state == "pending":
             job.state = "cancelled"
@@ -1133,6 +1297,7 @@ class TypeSchedApplication(Gtk.Application):
 
     def _start_job(self, job: Job) -> None:
         self.active_job_id = job.id
+        self.cancel_event = threading.Event()
         self.restore_window_after_job = bool(
             self.window is not None and self.window.get_visible()
         )
@@ -1155,29 +1320,32 @@ class TypeSchedApplication(Gtk.Application):
         self._update_tray()
 
         def launch_worker() -> bool:
-            target = Target.from_dict(job.target.to_dict())
+            steps = [Step.from_dict(step.to_dict()) for step in job.execution_steps]
 
             def work() -> None:
                 error: str | None = None
+                cancelled = False
                 try:
-                    self.automator.send_message(
-                        target,
-                        job.message,
-                        press_enter=job.press_enter,
+                    self.automator.run_steps(
+                        steps,
                         key_delay_ms=job.key_delay_ms,
+                        cancel=self.cancel_event,
                     )
+                except ProcedureCancelled as exc:
+                    cancelled = True
+                    error = str(exc)
                 except (AutomationError, ScreenLockedError) as exc:
                     error = str(exc)
                 except Exception as exc:  # Keep the scheduler alive on unexpected X11 errors.
                     error = f"Unexpected automation error: {exc}"
-                GLib.idle_add(self._finish_job, job.id, error)
+                GLib.idle_add(self._finish_job, job.id, error, cancelled)
 
             threading.Thread(target=work, name=f"typesched-{job.id[:8]}", daemon=True).start()
             return GLib.SOURCE_REMOVE
 
         GLib.timeout_add(350, launch_worker)
 
-    def _finish_job(self, job_id: str, error: str | None) -> bool:
+    def _finish_job(self, job_id: str, error: str | None, cancelled: bool = False) -> bool:
         job = self._find_job(job_id)
         self.active_job_id = None
         if job is None:
@@ -1185,10 +1353,18 @@ class TypeSchedApplication(Gtk.Application):
             return GLib.SOURCE_REMOVE
 
         completed_at = local_now()
-        click_only = not job.message
-        if error:
+        procedure = len(job.execution_steps) > 1
+        click_only = not procedure and not job.message
+        if cancelled:
+            job.state = "cancelled"
+            job.completed_at = completed_at.isoformat()
+            job.error = error
+            self._notify("Task stopped", error or "Remaining steps cancelled", job.id)
+        elif error:
             next_run = job.finish_attempt(completed_at, error)
             failure_title = "Click failed" if click_only else "Message not sent"
+            if procedure:
+                failure_title = "Procedure failed"
             if next_run is not None:
                 next_label = next_run.astimezone().strftime("%a, %b %d at %H:%M")
                 self._notify(
@@ -1206,6 +1382,9 @@ class TypeSchedApplication(Gtk.Application):
                 if click_only
                 else f"Sent to {job.target.display_name}"
             )
+            if procedure:
+                success_title = "Procedure completed"
+                success_body = f"Completed {len(job.execution_steps)} steps"
             if next_run is not None:
                 next_label = next_run.astimezone().strftime("%a, %b %d at %H:%M")
                 self._notify(
@@ -1236,7 +1415,7 @@ class TypeSchedApplication(Gtk.Application):
             self.show_window()
             assert self.window is not None
             self.window.show_feedback(
-                "A message is being typed. Wait for it to finish before quitting.",
+                "A task is running. Stop it in the queue or wait for it to finish before quitting.",
                 "error",
             )
             return
@@ -1254,7 +1433,7 @@ class TypeSchedApplication(Gtk.Application):
                 text="Quit TypeSched?",
             )
             dialog.format_secondary_text(
-                f"{pending} pending message{'s' if pending != 1 else ''} will not be sent "
+                f"{pending} pending task{'s' if pending != 1 else ''} will not run "
                 "while TypeSched is closed. They remain saved."
             )
             dialog.add_button("Keep running", Gtk.ResponseType.CANCEL)

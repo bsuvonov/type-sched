@@ -4,9 +4,10 @@ from dataclasses import dataclass
 import shutil
 import subprocess
 import time
+from threading import Event
 from typing import Callable
 
-from .model import Target
+from .model import Step, Target
 
 
 class AutomationError(RuntimeError):
@@ -14,6 +15,10 @@ class AutomationError(RuntimeError):
 
 
 class ScreenLockedError(AutomationError):
+    pass
+
+
+class ProcedureCancelled(AutomationError):
     pass
 
 
@@ -173,6 +178,24 @@ class X11Automator:
             if result.returncode == 0:
                 return "true" in result.stdout.lower()
         return False
+
+    def run_steps(
+        self, steps: list[Step], *, key_delay_ms: int = 18,
+        cancel: Event | None = None,
+    ) -> None:
+        cancel = cancel if cancel is not None else Event()
+        for index, step in enumerate(steps, 1):
+            if cancel.wait(step.wait_seconds):
+                raise ProcedureCancelled("Stopped before the next step")
+            try:
+                self.send_message(
+                    step.target, step.message, press_enter=step.press_enter,
+                    key_delay_ms=key_delay_ms,
+                )
+            except Exception as exc:
+                raise AutomationError(f"Step {index} of {len(steps)} failed: {exc}") from exc
+            if cancel.is_set():
+                raise ProcedureCancelled("Stopped after the current step")
 
     def send_message(
         self,

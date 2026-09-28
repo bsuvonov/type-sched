@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 import json
+import math
 import os
 from pathlib import Path
 import tempfile
@@ -11,7 +12,7 @@ import uuid
 
 APP_ID = "io.github.typesched.TypeSched"
 APP_NAME = "TypeSched"
-STORE_VERSION = 2
+STORE_VERSION = 3
 
 
 def local_now() -> datetime:
@@ -60,6 +61,30 @@ class Target:
 
 
 @dataclass
+class Step:
+    target: Target
+    message: str = ""
+    press_enter: bool = True
+    wait_seconds: float = 0
+
+    def __post_init__(self) -> None:
+        self.wait_seconds = float(self.wait_seconds)
+        if not math.isfinite(self.wait_seconds) or not 0 <= self.wait_seconds <= 3600:
+            raise ValueError("Step wait must be between 0 and 3600 seconds")
+        if not isinstance(self.target, Target) or not isinstance(self.message, str):
+            raise ValueError("Each step needs a target and text content")
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, value: dict) -> "Step":
+        data = {key: value[key] for key in cls.__dataclass_fields__ if key in value}
+        data["target"] = Target.from_dict(data["target"])
+        return cls(**data)
+
+
+@dataclass
 class Job:
     message: str
     run_at: str
@@ -75,6 +100,7 @@ class Job:
     run_count: int = 0
     last_error: str | None = None
     error: str | None = None
+    steps: list[Step] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.repeat_every_minutes is not None:
@@ -85,6 +111,11 @@ class Job:
             else:
                 if self.repeat_every_minutes <= 0:
                     self.repeat_every_minutes = None
+
+    @property
+    def execution_steps(self) -> list[Step]:
+        # Older saved jobs remain a single action with their original settings.
+        return self.steps or [Step(self.target, self.message, self.press_enter)]
 
     @property
     def scheduled_time(self) -> datetime:
@@ -168,6 +199,7 @@ class Job:
     def from_dict(cls, value: dict) -> "Job":
         data = dict(value)
         data["target"] = Target.from_dict(data["target"])
+        data["steps"] = [Step.from_dict(step) for step in data.get("steps", [])]
         allowed = cls.__dataclass_fields__.keys()
         return cls(**{key: data[key] for key in allowed if key in data})
 

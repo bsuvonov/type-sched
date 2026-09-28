@@ -26,6 +26,7 @@ TypeSched is built for Linux desktops running **X11**, especially Xfce.
 - **Window-aware targeting** — draw around an input or button; the target follows its window when it moves or resizes.
 - **Flexible schedules** — choose an exact time, a relative delay, or a repeating minute, hour, or day interval.
 - **Typing or clicking** — send multiline text with optional Enter, or leave **Message** empty for a click-only task.
+- **Multi-step procedures** — combine clicks and text entry across windows, with a delay before each step.
 - **Local persistent queue** — scheduled tasks survive restarts without an account, cloud service, or chat integration.
 
 ## Usage example
@@ -79,9 +80,15 @@ The installer is per-user and does not require root. To run without installing, 
 
 1. Open the destination app and keep the input or button visible.
 2. Click **Select area…** and draw a rectangle around the target.
-3. Choose an exact time or use **Send in**.
-4. Enter a message and choose whether to press Enter, or leave **Message** empty to click only. Enable **Repeat every** if needed.
-5. Click **Schedule message** and leave TypeSched running.
+3. Enter text and choose whether to press Enter, or leave **Message** empty to click only.
+4. Use **Add step** for each next action. Select its area and set **Wait before** if the previous action needs time to finish. Switch steps with the dropdown; use the arrows to reorder them.
+5. Choose an exact time or use **Send in**, optionally enable **Repeat every**, then click **Schedule procedure**.
+
+Steps run in order—for example: click a tab, type and send in one field, type and send
+in another, then click a button. Repeating runs the whole procedure from the first step.
+An error stops the remaining steps and identifies the failed step; a recurring task
+starts again at its next scheduled interval. The queue's stop button cancels remaining
+steps after the current action, or immediately during a wait.
 
 Closing the main window keeps TypeSched in the notification area. Use **Quit** from its
 tray menu to stop it; tasks cannot run while the app is closed.
